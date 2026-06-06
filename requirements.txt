@@ -1,6 +1,25 @@
-requests>=2.31.0
-websocket-client>=1.6.0
-numpy>=1.24.0
-pandas>=2.0.0
-scikit-learn>=1.3.0
-xgboost>=2.0.0
+# ══════════════════════════════════════════════════════════════════
+#  BinanceRadarPro v21 ULTRA — Python Dependencies
+#  Target: Python 3.10+ (Railway uses 3.11/3.12 by default)
+#  Last updated: 2026-06-06
+# ══════════════════════════════════════════════════════════════════
+
+# ── Core HTTP & WebSocket ─────────────────────────────────────────
+requests>=2.31.0              # Binance REST API + Telegram Bot API
+websocket-client>=1.6.0       # Binance WebSocket live price stream
+
+# ── Data & Math ───────────────────────────────────────────────────
+numpy>=1.24.0                 # Array operations, indicator math
+pandas>=2.0.0                 # Candle DataFrame processing
+
+# ── Machine Learning ──────────────────────────────────────────────
+scikit-learn>=1.3.0           # LinearRegression, GradientBoostingRegressor
+xgboost>=2.0.0                # XGBoost price prediction (optional but recommended)
+
+# ── Standard Library (no install needed) ─────────────────────────
+# threading, queue, logging, json, time, os, datetime
+# collections, dataclasses, typing — all built-in
+
+# ── NOT needed in headless/Railway mode ───────────────────────────
+# tkinter  — built into Python, skipped in headless mode
+# winsound — Windows only, gracefully ignored on Linux
