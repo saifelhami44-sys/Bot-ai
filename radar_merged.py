@@ -854,11 +854,25 @@ class BinanceRadarPro:
             time.sleep(10)
 
     def _ui_queue_consumer(self):
+        """
+        In GUI mode: schedules tasks via root.after().
+        In headless mode: executes UI tasks directly but swallows
+        any AttributeError from missing widgets silently.
+        """
+        headless = isinstance(self.root, FakeRoot)
         while self.running:
             try:
                 task = self.ui_queue.get(timeout=0.1)
                 if callable(task):
-                    self.root.after(0, task)
+                    if headless:
+                        try:
+                            task()
+                        except AttributeError:
+                            pass   # missing widget — ignore silently
+                        except Exception:
+                            pass
+                    else:
+                        self.root.after(0, task)
             except queue.Empty:
                 continue
             except Exception as e:
@@ -1397,24 +1411,56 @@ class BinanceRadarPro:
             return pd.DataFrame(data)
 
     def load_historical_klines(self):
+        # Try futures first, then spot as fallback — with retries
+        ENDPOINTS = [
+            "https://fapi.binance.com/fapi/v1/klines",
+            "https://api.binance.com/api/v3/klines",
+        ]
+        limit = self._get_history_limit()
+        logging.info("Loading %d candles for %s @ %s", limit, self.symbol, self.interval)
+
+        klines = None
+        for attempt in range(5):
+            for base_url in ENDPOINTS:
+                try:
+                    url = f"{base_url}?symbol={self.symbol}&interval={self.interval}&limit={limit}"
+                    r = self._api_get(url, timeout=15)
+                    data = r.json()
+                    if isinstance(data, list) and len(data) >= 50:
+                        klines = data
+                        break
+                    elif isinstance(data, list) and len(data) > 0:
+                        logging.warning(
+                            "Only %d candles from %s (attempt %d/5), retrying...",
+                            len(data), base_url.split("/")[2], attempt + 1
+                        )
+                    else:
+                        logging.warning(
+                            "Bad response from %s (attempt %d/5): %s",
+                            base_url.split("/")[2], attempt + 1, str(data)[:80]
+                        )
+                except Exception as e:
+                    logging.warning("Klines fetch error (attempt %d/5): %s", attempt + 1, str(e)[:60])
+            if klines:
+                break
+            wait = min(5 * (attempt + 1), 30)
+            logging.info("Waiting %ds before retry...", wait)
+            time.sleep(wait)
+
+        if not klines:
+            logging.error("Failed to load candles for %s after all retries", self.symbol)
+            return
+
+        logging.info("Loaded %d candles for %s @ %s", len(klines), self.symbol, self.interval)
         try:
-            limit = self._get_history_limit()
-            logging.info("Loading %d candles for %s @ %s", limit, self.symbol, self.interval)
-            url = f"https://fapi.binance.com/fapi/v1/klines?symbol={self.symbol}&interval={self.interval}&limit={limit}"
-            r = self._api_get(url, timeout=8)
-            klines = r.json()
-            if not klines:
-                logging.error("No klines received for %s", self.symbol)
-                return
-            if len(klines) < 50:
-                logging.warning("Only %d candles received (need 50+), retrying...", len(klines))
-                return
-            logging.info("Loaded %d candles for %s @ %s", len(klines), self.symbol, self.interval)
             df = self._klines_to_df(klines)
             with self.df_lock:
                 self.candle_deque.clear()
                 for _, row in df.iterrows():
-                    self.candle_deque.append(Candle(t=row["t"], o=row["o"], h=row["h"], l=row["l"], c=row["c"], v=row["v"]))
+                    self.candle_deque.append(Candle(
+                        t=row["t"], o=row["o"], h=row["h"],
+                        l=row["l"], c=row["c"], v=row["v"]
+                    ))
             last_open = float(df.iloc[-1]["o"])
             if last_open > 0:
                 self.candle_open_price = last_open
@@ -1427,7 +1473,7 @@ class BinanceRadarPro:
             self.new_data_event.set()
             threading.Thread(target=self._immediate_analysis, daemon=True).start()
         except Exception as e:
-            self.set_error("REST: " + str(e)[:60])
+            self.set_error("REST parse: " + str(e)[:60])
 
     def _immediate_analysis(self):
         try:
@@ -6431,16 +6477,27 @@ _original_refresh_ui = BinanceRadarPro.refresh_ui
 def _safe_build_ui(self):
     """Build the real UI only when a real Tk root is present."""
     if isinstance(self.root, FakeRoot):
-        # Create silent mock widgets so attribute lookups don't crash
         mock = _FakeMock()
-        for attr in (
-            "status_lbl", "ws_status_lbl", "ml_lbl", "err_lbl",
-            "ws_live_lbl", "price_lbl", "dir_lbl", "conf_lbl",
-            "strength_lbl", "entry_lbl", "sl_lbl", "tp_lbl",
-            "rr_lbl", "pos_lbl", "win_lbl", "struct_lbl",
-            "trend_lbl", "vol_lbl", "conflict_lbl", "session_lbl",
-            "reason_lbl", "_coin_tv", "_tab_frame",
-        ):
+        _ALL_WIDGET_ATTRS = (
+            "status_lbl", "ws_status_lbl", "ml_lbl", "err_lbl", "ws_live_lbl",
+            "bb_status_lbl",
+            "price_lbl", "dir_lbl", "conf_lbl", "strength_lbl",
+            "entry_lbl", "sl_lbl", "tp_lbl", "rr_lbl",
+            "pos_lbl", "win_lbl", "struct_lbl", "trend_lbl",
+            "vol_lbl", "conflict_lbl", "session_lbl", "reason_lbl",
+            "fore_dir_lbl", "fore_conf_lbl", "fore_entry_lbl",
+            "fore_sl_lbl", "fore_tp_lbl", "fore_rr_lbl",
+            "_meter_dir_lbl", "_meter_conf_lbl", "_meter_strength_lbl",
+            "_ai_dir_lbl", "_ai_conf_lbl", "_ai_strength_lbl",
+            "_ai_entry_lbl", "_ai_sl_lbl", "_ai_tp_lbl",
+            "_ai_rr_lbl", "_ai_session_lbl", "_ai_conflict_lbl",
+            "_ai_reason_lbl",
+            "_market_pred_dir_lbl", "_market_pred_price_lbl",
+            "_ema_trend_lbl", "_supertrend_lbl",
+            "_intel_status_lbl", "_news_sentiment_lbl", "_mtf_status_lbl",
+            "_coin_tv", "_tab_frame",
+        )
+        for attr in _ALL_WIDGET_ATTRS:
             setattr(self, attr, mock)
         logging.info("[HEADLESS] build_ui skipped — running in background mode")
     else:
